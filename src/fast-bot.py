@@ -16,7 +16,12 @@ from telegram.ext import (
     ExtBot,
     TypeHandler,
 )
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
+
+TOKEN = os.environ.get("TOKEN")
 # Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -91,23 +96,21 @@ async def startup_event():
 
     # Pass webhook settings to telegram
     await application.bot.set_webhook(url=f"{URL}/telegram", allowed_updates=Update.ALL_TYPES)
-
+    await application.initialize()
+    await application.start()
     app.state.application = application
 
 
+
 @app.post("/telegram")
-async def telegram(request: Request) -> HealthResponse:
+async def telegram(request: Request) -> Response:
     """Handle incoming Telegram updates by putting them into the `update_queue`"""
     application = request.app.state.application
     update_data = await request.json()
     update = Update.de_json(data=update_data, bot=application.bot)
+    await application.update_queue.put(update)
 
-    if update.message and update.message.text.startswith('/start'):
-        await start(update, application)
-    else:
-        await application.update_queue.put(update)
-
-    return HealthResponse(message="The bot is still running fine :)")
+    return Response(status_code=HTTPStatus.OK)
 
 @app.route("/submitpayload", methods=["GET", "POST"])
 async def custom_updates(request: Request) -> Response:
@@ -115,7 +118,6 @@ async def custom_updates(request: Request) -> Response:
     Handle incoming webhook updates by also putting them into the `update_queue` if
     the required parameters were passed correctly.
     """
-    print("This is request parmas", request.query_params)
     try:
         query_params = request.query_params
         payload_request = PayloadRequest(user_id=int(query_params["user_id"]), payload=query_params["payload"] )
@@ -155,9 +157,12 @@ async def webhook_update(update: WebhookUpdate, context: CustomContext) -> None:
     )
     await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text, parse_mode=ParseMode.HTML)
 
-
-# async def main() -> None:
-#     await startup_event()
+@app.on_event("shutdown")
+def shutdown_event():
+    application = app.state.application
+    application.stop()
+    with application:
+        logger.info("Application shutdown")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=PORT)
